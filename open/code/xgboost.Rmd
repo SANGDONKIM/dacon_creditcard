@@ -1,0 +1,276 @@
+---
+title: "XGboost bayesopt with credit data"
+output:
+  html_document:
+    number_sections: true
+    fig_caption: true
+    toc: true
+    fig_width: 5
+    fig_height: 4
+    theme: cosmo
+    highlight: tango
+    code_folding: show
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      fig.align = "center")
+```
+
+# Preparations {.tabset .tabset-fade}
+
+## Libraries
+
+```{r load_lib, message=FALSE, warning=FALSE, results='hide'}
+library(tidymodels)
+library(tidyverse)
+library(lubridate)
+library(skimr)
+library(magrittr)
+library(data.table)
+library(gridExtra)
+library(themis)
+
+theme_set(theme_bw())
+```
+
+## Data load
+
+```{r}
+file_path <- 'C:/Users/sangdon/Desktop/dacon_creditcard/open/open'
+files <- list.files(file_path)
+files
+```
+
+```{r, message=FALSE}
+train <- read_csv(file.path(file_path, "train.csv"))
+test <- read_csv(file.path(file_path, "test.csv"))
+```
+
+# Data overview (데이터 기본정보) {.tabset .tabset-fade}
+
+## train data
+```{r}
+head(train)
+skim(train)
+```
+
+## test data
+
+```{r}
+head(test)
+skim(test)
+
+test %>% 
+  summarise(across(.fns = ~sum(is.na(.))/length(.)))
+
+```
+
+# data preprocessing {.tabset .tabset-fade}
+
+## combine train, test 
+
+```{r}
+all_data <- bind_rows(train, test)
+```
+
+## Change variable type
+```{r}
+cols <- colnames(all_data)[c(13:18, 20)]
+all_data %>% 
+    mutate_if(is.character, as.factor) %>% 
+    mutate_at(cols, funs(factor(.))) -> all_data
+```
+
+## change date variable 
+```{r}
+all_data$DAYS_BIRTH %>% summary()
+all_data$DAYS_EMPLOYED %>% summary()
+all_data$begin_month %>% summary()
+
+all_data %>% 
+    ggplot(aes(x = DAYS_BIRTH)) + geom_histogram()
+
+all_data %>% 
+    ggplot(aes(x = DAYS_EMPLOYED)) + geom_histogram()
+
+all_data %>% 
+    ggplot(aes(x = begin_month)) + geom_histogram()
+
+
+all_data %>% 
+    mutate(DAYS_BIRTH = DAYS_BIRTH + 25152, 
+           DAYS_EMPLOYED = DAYS_EMPLOYED + 15713, 
+           begin_month = begin_month + 60) -> all_data
+
+table(all_data$begin_month==0)
+table(all_data$DAYS_BIRTH==0)
+table(all_data$DAYS_EMPLOYED==0)
+
+```
+
+## Recipes
+```{r}
+fac_col <- all_data %>% 
+    select_if(is.factor) %>% 
+    names()
+
+all_data %>% 
+    recipe(credit~.) %>%
+    step_rm(index) %>% 
+    step_other(fac_col, threshold = 0.1) %>% 
+    step_zv(all_predictors()) %>%
+    step_bagimpute(occyp_type, impute_with = imp_vars(car, reality, income_total, income_type, edu_type, phone, ),  trees = 100) %>% 
+    step_discretize(begin_month, min_unique = 5, num_breaks = 5) %>%
+    step_dummy(all_nominal(), one_hot = T) %>% 
+    prep(training = all_data) %>%
+    bake(new_data = all_data) -> all_data
+
+```
+
+
+
+# Split train, test {.tabset .tabset-fade}
+
+```{r}
+train_index <- seq_len(nrow(train))
+train2 <- all_data[train_index,]
+test2 <- all_data[-train_index,]
+```
+
+# XGboost setting {.tabset .tabset-fade}
+
+## XGBOOST hyperparameter setting
+
+```{r}
+xgb_spec <- boost_tree(
+    trees = 1000,  
+    tree_depth = tune(),  
+    min_n = tune(), 
+    loss_reduction = tune(),  
+    sample_size = tune(), 
+    mtry = tune(),  
+    learn_rate = tune() 
+) %>% 
+    set_engine('xgboost') %>% 
+    set_mode('classification')
+
+params <- parameters(xgb_spec) %>% 
+    finalize(train2)
+```
+
+# XGboost workflow {.tabset .tabset-fade}
+
+## workflow model setting
+
+```{r}
+xgb_wf <- workflow() %>% 
+    add_formula(credit~.) %>% 
+    add_model(xgb_spec)
+```
+
+## cross validation
+
+```{r}
+set.seed(2021)
+vb_folds <- vfold_cv(train2, v = 5)
+vb_folds
+```
+
+## hyperparameter tuning
+
+```{r}
+library(tictoc)
+tic()
+doParallel::registerDoParallel()
+xgb_res <- tune_bayes(
+    object = xgb_wf, 
+    resamples = vb_folds, 
+    param_info = params, 
+    iter = 30, 
+    initial = 10, 
+    control = control_bayes(
+        verbose = TRUE, 
+        no_improve = 10, 
+        seed = 123) 
+)
+toc() # 7000.18
+
+
+```
+## Final model update
+
+```{r}
+best_param <- select_best(xgb_res)
+final_xgb <- finalize_workflow(xgb_wf, best_param)
+final_xgb
+```
+
+## final model setting
+
+```{r}
+final_model <- finalize_model(xgb_spec, best_param) 
+final_model # tuning이 끝난 최종 모형 
+```
+
+## final model workflow에 업데이트
+
+```{r}
+final_workflow <- xgb_wf %>% update_model(final_model)
+```
+
+## final model 학습
+
+```{r}
+xgb_fit <- fit(final_workflow, data = train2)
+```
+
+# Result {.tabset .tabset-fade}
+
+## Prediction 
+
+```{r}
+pred_xgb <- 
+    predict(xgb_fit, test2) %>% 
+    mutate(modelo = "XGBoost")
+pred_xgb %>% head()
+
+```
+
+## feature importance plot
+
+```{r}
+library(vip) # feature importance plot 그리기 
+final_xgb %>% 
+    fit(data = train2) %>%  # iter, training_rmse 
+    pull_workflow_fit() %>% #  http://www.rebeccabarter.com/blog/2020-03-25_machine_learning/
+    vip(geom = 'point') # DAYS_BIRTH, DAYS_EMPLOYED, income_total, begin_monthbin5
+```
+
+
+# Submit file {.tabset .tabset-fade}
+
+```{r}
+subfile <- read_csv(file.path(file_path, "sample_submission.csv"))
+head(subfile)
+
+pred_xgb %>% 
+    recipe(.pred_class~.) %>% 
+    step_dummy(.pred_class, one_hot = T) %>% 
+    prep() %>% 
+    bake(new_data = pred_xgb) -> pred_xgb
+
+pred_xgb %>% 
+    rename('0' = .pred_class_X0, '1' = .pred_class_X1, '2' = .pred_class_X2) %>% 
+    select(-modelo) -> pred_xgb
+
+subfile %>% 
+    select(index) %>% 
+    bind_cols(pred_xgb) -> subfile
+
+write.csv(subfile, row.names = FALSE,
+          file.path(file_path, "xgb_bayes.csv")) 
+```
+
