@@ -39,7 +39,7 @@ theme_set(theme_bw())
 ## Data load
 
 ```{r}
-file_path <- 'C:/Users/sangdon/Desktop/dacon_creditcard/open/open'
+file_path <- 'C:/Users/uos/Desktop/dacon_creditcard/open/open'
 files <- list.files(file_path)
 files
 ```
@@ -138,6 +138,7 @@ all_data %>%
 train_index <- seq_len(nrow(train))
 train2 <- all_data[train_index,]
 test2 <- all_data[-train_index,]
+
 ```
 
 # XGboost setting {.tabset .tabset-fade}
@@ -154,11 +155,8 @@ xgb_spec <- boost_tree(
     mtry = tune(),  
     learn_rate = tune() 
 ) %>% 
-    set_engine('xgboost') %>% 
+    set_engine('xgboost') %>% # objective ="multi:softprob", num_class = 3, 
     set_mode('classification')
-
-params <- parameters(xgb_spec) %>% 
-    finalize(train2)
 ```
 
 # XGboost workflow {.tabset .tabset-fade}
@@ -174,32 +172,41 @@ xgb_wf <- workflow() %>%
 ## cross validation
 
 ```{r}
-set.seed(2021)
+set.seed(20210409)
 vb_folds <- vfold_cv(train2, v = 5)
 vb_folds
 ```
 
-## hyperparameter tuning
+## Grid search 
+```{r}
+xgb_grid <- grid_latin_hypercube(
+    tree_depth(), 
+    min_n(), 
+    loss_reduction(), 
+    sample_size = sample_prop(), 
+    finalize(mtry(), train2), # mtry() : [1, ?], finalize(mtry(), train2) : [1, 30]
+    learn_rate(), 
+    size = 30
+)
+```
 
+
+## hyperparameter 튜닝 
 ```{r}
 library(tictoc)
 tic()
 doParallel::registerDoParallel()
-xgb_res <- tune_bayes(
-    object = xgb_wf, 
+set.seed(1234)
+
+xgb_res <- tune_grid(
+    xgb_wf,  
     resamples = vb_folds, 
-    param_info = params, 
-    iter = 30, 
-    initial = 10, 
-    control = control_bayes(
-        verbose = TRUE, 
-        no_improve = 10, 
-        seed = 123) 
+    grid = xgb_grid, 
+    control = control_grid(save_pred = TRUE)    
 )
-toc() # 7000.18
-
-
+toc()  
 ```
+
 ## Final model update
 
 ```{r}
