@@ -45,8 +45,8 @@ files
 ```
 
 ```{r, message=FALSE}
-train <- read_csv(file.path(file_path, "train.csv"))
-test <- read_csv(file.path(file_path, "test.csv"))
+train <- read_csv(file.path(file_path, "train.csv")) %>% janitor::clean_names()
+test <- read_csv(file.path(file_path, "test.csv")) %>% janitor::clean_names()
 ```
 
 # Data overview (데이터 기본정보) {.tabset .tabset-fade}
@@ -86,50 +86,92 @@ all_data %>%
 
 ## change date variable 
 ```{r}
-all_data$DAYS_BIRTH %>% summary()
-all_data$DAYS_EMPLOYED %>% summary()
-all_data$begin_month %>% summary()
-
-all_data %>% 
-    ggplot(aes(x = DAYS_BIRTH)) + geom_histogram()
-
-all_data %>% 
-    ggplot(aes(x = DAYS_EMPLOYED)) + geom_histogram()
-
-all_data %>% 
-    ggplot(aes(x = begin_month)) + geom_histogram()
+all_data$DAYS_BIRTH %>% summary() # 출생일 
+all_data$DAYS_EMPLOYED %>% summary() # 업무 시작일 
+all_data$begin_month %>% summary() # 신용카드 발급 월 
 
 
 all_data %>% 
-    mutate(DAYS_BIRTH = DAYS_BIRTH + 25152, 
-           DAYS_EMPLOYED = DAYS_EMPLOYED + 15713, 
+    mutate(days_birth = days_birth + 25152,
+           days_employed = days_employed + 15713, 
            begin_month = begin_month + 60) -> all_data
 
-table(all_data$begin_month==0)
-table(all_data$DAYS_BIRTH==0)
-table(all_data$DAYS_EMPLOYED==0)
+all_data %>% 
+  mutate(birth = round(days_birth/365), 
+         month_employed = round(days_employed/30)) %>% 
+  select(-c(days_birth, days_employed))-> all_data
+
+head(all_data)
+```
+
+
+# Univariate visualization {.tabset .tabset-fade}
+
+
+
+```{r}
+table(all_data$gender, useNA = 'always')
+table(all_data$car, useNA = 'always')
+table(all_data$reality, useNA = 'always')
+table(all_data$income_type, useNA = 'always') # label 불균형 
+table(all_data$edu_type, useNA = 'always')
+table(all_data$family_type, useNA = 'always')
+table(all_data$house_type, useNA = 'always') # label 불균형 
+table(all_data$flag_mobil, useNA = 'always')
+table(all_data$work_phone, useNA = 'always')
+table(all_data$phone, useNA = 'always')
+table(all_data$email, useNA = 'always') # label 불균형 
+table(all_data$occyp_type, useNA = 'always') # label 불균형 
+table(all_data$credit)
+
+all_data %>% 
+  recipe(credit~.) %>%
+  step_rm(flag_mobil) %>% 
+  step_other(all_nominal(), threshold = 0.1) %>% 
+  step_bagimpute(occyp_type, impute_with = imp_vars(car, reality, income_total, income_type, edu_type, phone),  trees = 100) %>% 
+  prep(training = all_data) %>% 
+  bake(new_data = all_data) -> all_data
+  
 
 ```
 
-## Recipes
-```{r}
-fac_col <- all_data %>% 
-    select_if(is.factor) %>% 
-    names()
 
+```{r}
+all_data %>% 
+  ggplot(aes(x = child_num)) + geom_histogram()
+```
+
+```{r}
+all_data %>% 
+  ggplot(aes(x = income_total)) + geom_histogram()
+```
+```{r}
+all_data %>% 
+  ggplot(aes(x = days_birth)) + geom_histogram()
+```
+```{r}
+all_data %>% 
+  ggplot(aes(x = days_employed)) + geom_histogram()
+
+table(all_data$days_employed)
+```
+```{r}
+all_data %>% 
+  ggplot(aes(x = begin_month)) + geom_histogram()
+```
+
+
+# Recipes
+```{r}
 all_data %>% 
     recipe(credit~.) %>%
     step_rm(index) %>% 
-    step_other(fac_col, threshold = 0.1) %>% 
-    step_zv(all_predictors()) %>%
-    step_bagimpute(occyp_type, impute_with = imp_vars(car, reality, income_total, income_type, edu_type, phone, ),  trees = 100) %>% 
-    step_discretize(begin_month, min_unique = 5, num_breaks = 5) %>%
-    step_dummy(all_nominal(), one_hot = T) %>% 
+    #step_discretize(days_employed, breaks = 7) %>% 
+    # step_dummy(all_nominal(), one_hot = T) %>% 
     prep(training = all_data) %>%
     bake(new_data = all_data) -> all_data
 
 ```
-
 
 
 # Split train, test {.tabset .tabset-fade}
@@ -140,6 +182,94 @@ train2 <- all_data[train_index,]
 test2 <- all_data[-train_index,]
 
 ```
+
+# cross validation
+
+```{r}
+set.seed(20210410)
+vb_folds <- vfold_cv(train2, v = 5, strata = credit)
+vb_folds
+```
+
+# randomforest setting {.tabset .tabset-fade}
+
+## randomforest hyperparameter setting 
+```{r}
+rf_spec <- rand_forest(
+  mtry = tune(), 
+  trees = 1000, 
+  min_n = tune()
+) %>% 
+  set_mode('classification') %>% 
+  set_engine('ranger')
+```
+
+## workflow model setting
+
+```{r}
+rf_wf <- workflow() %>% 
+    add_formula(credit~.) %>% 
+    add_model(rf_spec)
+```
+
+
+## hyperparameter 튜닝 
+```{r}
+library(tictoc)
+tic()
+doParallel::registerDoParallel()
+set.seed(1234)
+
+rf_res <- tune_grid(
+    rf_wf,  
+    resamples = vb_folds, 
+    grid = 30,
+    control = control_grid(save_pred = TRUE)    
+)
+toc() # 2270.45
+
+```
+
+
+## Final model update
+
+```{r}
+best_param_rf <- select_best(rf_res) # metric 설정안해놓으면 roc_auc로 설정됨 
+final_rf <- finalize_workflow(rf_wf, best_param_rf)
+final_rf
+```
+
+## final model setting
+
+```{r}
+final_rf_model <- finalize_model(rf_spec, best_param_rf) 
+final_rf_model 
+```
+
+## final model workflow에 업데이트
+
+```{r}
+final_rf_workflow <- rf_wf %>% update_model(final_rf_model)
+```
+
+## final model 학습
+
+```{r}
+rf_fit <- fit(final_rf_workflow, data = train2)
+```
+
+# Result {.tabset .tabset-fade}
+
+## Prediction 
+
+```{r}
+pred_rf <- 
+    predict(rf_fit, test2) %>% 
+    mutate(modelo = "randomforest")
+pred_rf %>% head()
+
+```
+
 
 # XGboost setting {.tabset .tabset-fade}
 
@@ -261,23 +391,22 @@ final_xgb %>%
 
 ```{r}
 subfile <- read_csv(file.path(file_path, "sample_submission.csv"))
-head(subfile)
 
-pred_xgb %>% 
-    recipe(.pred_class~.) %>% 
+pred_rf %>% 
+    recipe(.pred_class~.) %>%
+    step_rm(modelo) %>% 
     step_dummy(.pred_class, one_hot = T) %>% 
     prep() %>% 
-    bake(new_data = pred_xgb) -> pred_xgb
+    bake(new_data = pred_rf) -> pred_result
 
-pred_xgb %>% 
-    rename('0' = .pred_class_X0, '1' = .pred_class_X1, '2' = .pred_class_X2) %>% 
-    select(-modelo) -> pred_xgb
+pred_result
 
 subfile %>% 
-    select(index) %>% 
-    bind_cols(pred_xgb) -> subfile
+  select(index) %>% 
+  bind_cols(pred_result) %>% 
+  rename('0' = '.pred_class_X0', '1' = '.pred_class_X1', '2' = '.pred_class_X2') -> subfile
 
 write.csv(subfile, row.names = FALSE,
-          file.path(file_path, "xgb_bayes.csv")) 
+          file.path(file_path, "rf_result.csv")) 
 ```
 
