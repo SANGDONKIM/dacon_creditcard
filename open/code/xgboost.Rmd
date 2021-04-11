@@ -224,6 +224,7 @@ rf_res <- tune_grid(
     rf_wf,  
     resamples = vb_folds, 
     grid = 30,
+    metrics = metric_set(mn_log_loss), 
     control = control_grid(save_pred = TRUE)    
 )
 toc() # 2270.45
@@ -264,7 +265,7 @@ rf_fit <- fit(final_rf_workflow, data = train2)
 
 ```{r}
 pred_rf <- 
-    predict(rf_fit, test2) %>% 
+    predict(rf_fit, test2, type = 'prob') %>% 
     mutate(modelo = "randomforest")
 pred_rf %>% head()
 
@@ -332,6 +333,7 @@ xgb_res <- tune_grid(
     xgb_wf,  
     resamples = vb_folds, 
     grid = xgb_grid, 
+    metrics = metric_set(mn_log_loss),
     control = control_grid(save_pred = TRUE)    
 )
 toc()  
@@ -389,24 +391,17 @@ final_xgb %>%
 
 # Submit file {.tabset .tabset-fade}
 
-```{r}
-subfile <- read_csv(file.path(file_path, "sample_submission.csv"))
 
-pred_rf %>% 
-    recipe(.pred_class~.) %>%
-    step_rm(modelo) %>% 
-    step_dummy(.pred_class, one_hot = T) %>% 
-    prep() %>% 
-    bake(new_data = pred_rf) -> pred_result
+```{r, message=FALSE}
+submission <- read_csv(file.path(file_path, "sample_submission.csv"))
 
-pred_result
+sub_col <- names(submission)
 
-subfile %>% 
-  select(index) %>% 
-  bind_cols(pred_result) %>% 
-  rename('0' = '.pred_class_X0', '1' = '.pred_class_X1', '2' = '.pred_class_X2') -> subfile
+submission <- bind_cols(submission$index, pred_rf[,c(1,2,3)])
+submission
+names(submission) <- sub_col
 
-write.csv(subfile, row.names = FALSE,
-          file.path(file_path, "rf_result.csv")) 
+write.csv(submission, row.names = FALSE,
+          "dacon_randomforest.csv")
 ```
 
