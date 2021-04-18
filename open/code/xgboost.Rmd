@@ -32,14 +32,14 @@ library(magrittr)
 library(data.table)
 library(gridExtra)
 library(themis)
-
+library(ggmosaic)
 theme_set(theme_bw())
 ```
 
 ## Data load
 
 ```{r}
-file_path <- 'C:/Users/uos/Desktop/dacon_creditcard/open/open'
+file_path <- 'C:/Users/sangdon/Desktop/dacon_creditcard/open/open'
 files <- list.files(file_path)
 files
 ```
@@ -85,29 +85,48 @@ all_data %>%
 ```
 
 ## change date variable 
+
 ```{r}
-all_data$DAYS_BIRTH %>% summary() # 출생일 
-all_data$DAYS_EMPLOYED %>% summary() # 업무 시작일 
-all_data$begin_month %>% summary() # 신용카드 발급 월 
-
-
 all_data %>% 
-    mutate(days_birth = days_birth + 25152,
-           days_employed = days_employed + 15713, 
-           begin_month = begin_month + 60) -> all_data
+    mutate(days_birth = days_birth + 25152, # 출생일
+           days_employed = days_employed + 15713, # 업무 시작일  
+           begin_month = begin_month + 60) -> all_data # 신용카드 발급 월 
 
 all_data %>% 
   mutate(birth = round(days_birth/365), 
          month_employed = round(days_employed/30)) %>% 
   select(-c(days_birth, days_employed))-> all_data
 
-head(all_data)
+```
+
+```{r}
+all_data %>% 
+  ggplot(aes(x = birth, y = income_total)) + geom_point()
+
+all_data %>% 
+  ggplot(aes(x = begin_month, y = income_total)) + geom_point()
+
+all_data %>% 
+  ggplot(aes(x = month_employed, y = income_total)) + geom_point()
+
+all_data %>% 
+  ggplot(aes(x = month_employed)) + geom_histogram()
+
+all_data %>% 
+  count(month_employed) # month_employed : 12699, count = 6135 
+```
+```{r}
+all_data %>% 
+  recipe(credit~.) %>% 
+  step_discretize(month_employed, num_breaks = 5) %>% 
+  prep(training = all_data) %>% 
+  bake(new_data = all_data) -> all_data
+
 ```
 
 
+
 # Univariate visualization {.tabset .tabset-fade}
-
-
 
 ```{r}
 table(all_data$gender, useNA = 'always')
@@ -123,53 +142,108 @@ table(all_data$phone, useNA = 'always')
 table(all_data$email, useNA = 'always') # label 불균형 
 table(all_data$occyp_type, useNA = 'always') # label 불균형 
 table(all_data$credit)
+```
 
+
+## income_type : 소득 분류 
+commercial associate, pensioner(연금 수급자), state servant(공무원), student, working 
+
+```{r}
+table(all_data$income_type, useNA = 'always')
+all_data %>% 
+  ggplot(aes(x = income_type, y = income_total)) + geom_boxplot() 
+
+all_data %>% 
+  filter(!is.na(income_type), !is.na(credit)) %>% 
+  ggplot()+geom_mosaic(aes(x = product(income_type, credit), fill = income_type))
+
+```
+## house_type : 생활 방식 
+co-op apartment(주택 협동조합), house apartment, municipal apartment(공공 주택), office apartment(회사), rented apartment(임대 주택), with parents
+
+```{r}
+all_data %>% 
+  ggplot(aes(x = house_type)) + geom_bar() + 
+  aes(stringr::str_wrap(house_type, 15)) + 
+  xlab('house_type')
+
+all_data %>% 
+  filter(!is.na(house_type), !is.na(credit)) %>% 
+  ggplot()+geom_mosaic(aes(x = product(house_type, credit), fill = house_type))
+
+```
+
+## email
+
+```{r}
+all_data %>% 
+  ggplot(aes(x = email)) + geom_bar()
+
+all_data %>% 
+  ggplot(aes(x = email, y = income_total, fill = email)) + geom_boxplot()
+
+all_data %>% 
+  filter(!is.na(email), !is.na(credit)) %>% 
+  ggplot()+geom_mosaic(aes(x = product(email, credit), fill = email))
+
+```
+
+## occupation type
+
+accountants, cleaning staff, cooking staff, core staff(정규직), drivers, high skill tech staff, HR staff, IT staff, Laborers, Low-skill Laborers, managers, medicine staff
+
+```{r}
+table(all_data$occyp_type, useNA = 'always') # label 불균형 
+
+
+all_data %>% 
+  ggplot(aes(x = occyp_type)) + 
+  geom_bar() + 
+  coord_flip()
+
+all_data %>% 
+  filter(!is.na(occyp_type), !is.na(credit)) %>% 
+  ggplot(aes(x = occyp_type, y = income_total, fill = occyp_type)) + 
+  geom_boxplot() + 
+  coord_flip()
+
+all_data %>% 
+  filter(!is.na(occyp_type), !is.na(credit)) %>% 
+  ggplot()+geom_mosaic(aes(x = product(occyp_type, credit), fill =occyp_type))
+
+```
+
+## Preprocessing factor variable 
+
+```{r}
 all_data %>% 
   recipe(credit~.) %>%
-  step_rm(flag_mobil) %>% 
-  step_other(all_nominal(), threshold = 0.1) %>% 
-  step_bagimpute(occyp_type, impute_with = imp_vars(car, reality, income_total, income_type, edu_type, phone),  trees = 100) %>% 
+  step_rm(flag_mobil, email) %>%
+  step_other(income_type, occyp_type, house_type, threshold = 0.1) %>% 
+  step_bagimpute(occyp_type, impute_with = imp_vars(car, reality, income_total, income_type, edu_type, house_type, family_type, family_size),  trees = 100) %>% 
   prep(training = all_data) %>% 
   bake(new_data = all_data) -> all_data
-  
 
-```
-
-
-```{r}
-all_data %>% 
-  ggplot(aes(x = child_num)) + geom_histogram()
-```
-
-```{r}
-all_data %>% 
-  ggplot(aes(x = income_total)) + geom_histogram()
-```
-```{r}
-all_data %>% 
-  ggplot(aes(x = days_birth)) + geom_histogram()
-```
-```{r}
-all_data %>% 
-  ggplot(aes(x = days_employed)) + geom_histogram()
-
-table(all_data$days_employed)
-```
-```{r}
-all_data %>% 
-  ggplot(aes(x = begin_month)) + geom_histogram()
 ```
 
 
 # Recipes
 ```{r}
 all_data %>% 
-    recipe(credit~.) %>%
-    step_rm(index) %>% 
-    #step_discretize(days_employed, breaks = 7) %>% 
-    # step_dummy(all_nominal(), one_hot = T) %>% 
-    prep(training = all_data) %>%
-    bake(new_data = all_data) -> all_data
+  recipe(credit~.) %>%
+  step_rm(index) %>% 
+  #step_integer(all_nominal(), -all_outcomes()) %>% 
+  #step_center(all_predictors(), -all_outcomes()) %>% 
+  step_dummy(all_nominal(), -credit, one_hot = TRUE) %>% 
+  prep(training = all_data) %>%
+  bake(new_data = all_data) -> all_data
+
+all_data %>% 
+  recipe(credit~.) %>% 
+  step_smote(credit, over_ratio = 0.5) %>% 
+  prep(training = all_data) %>%
+  bake(new_data = all_data) -> all_data
+
 
 ```
 
@@ -286,7 +360,7 @@ xgb_spec <- boost_tree(
     mtry = tune(),  
     learn_rate = tune() 
 ) %>% 
-    set_engine('xgboost') %>% # objective ="multi:softprob", num_class = 3, 
+    set_engine('xgboost') %>%  
     set_mode('classification')
 ```
 
@@ -305,7 +379,6 @@ xgb_wf <- workflow() %>%
 ```{r}
 set.seed(20210409)
 vb_folds <- vfold_cv(train2, v = 5)
-vb_folds
 ```
 
 ## Grid search 
@@ -315,7 +388,7 @@ xgb_grid <- grid_latin_hypercube(
     min_n(), 
     loss_reduction(), 
     sample_size = sample_prop(), 
-    finalize(mtry(), train2), # mtry() : [1, ?], finalize(mtry(), train2) : [1, 30]
+    finalize(mtry(), train2), 
     learn_rate(), 
     size = 30
 )
@@ -372,8 +445,7 @@ xgb_fit <- fit(final_workflow, data = train2)
 
 ```{r}
 pred_xgb <- 
-    predict(xgb_fit, test2) %>% 
-    mutate(modelo = "XGBoost")
+    predict(xgb_fit, test2, type = 'prob') 
 pred_xgb %>% head()
 
 ```
@@ -381,12 +453,38 @@ pred_xgb %>% head()
 ## feature importance plot
 
 ```{r}
-library(vip) # feature importance plot 그리기 
+library(vip) 
 final_xgb %>% 
-    fit(data = train2) %>%  # iter, training_rmse 
-    pull_workflow_fit() %>% #  http://www.rebeccabarter.com/blog/2020-03-25_machine_learning/
-    vip(geom = 'point') # DAYS_BIRTH, DAYS_EMPLOYED, income_total, begin_monthbin5
+    fit(data = train2) %>%   
+    pull_workflow_fit() %>% 
+    vip(geom = 'point') 
 ```
+# tabnet 
+
+```{r}
+library(tabnet)
+all_data %>% 
+  recipe(credit~.) %>% 
+  step_normalize(all_numeric()) %>% 
+  prep(training = all_data) %>%
+  bake(new_data = all_data) -> tab_rec
+
+```
+
+```{r}
+wflow_tabnet_fit <- 
+  workflow() %>% 
+  add_model(
+    tabnet(
+      mode = 'classification', 
+      batch_size = 128, 
+      virtual_batch_size = 128, 
+      epochs = 10
+    )
+  )
+```
+
+
 
 
 # Submit file {.tabset .tabset-fade}
@@ -397,11 +495,11 @@ submission <- read_csv(file.path(file_path, "sample_submission.csv"))
 
 sub_col <- names(submission)
 
-submission <- bind_cols(submission$index, pred_rf[,c(1,2,3)])
+submission <- bind_cols(submission$index, pred_xgb)
 submission
 names(submission) <- sub_col
 
 write.csv(submission, row.names = FALSE,
-          "dacon_randomforest.csv")
+          "dacon_xgb.csv")
 ```
 
