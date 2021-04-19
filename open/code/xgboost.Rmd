@@ -33,13 +33,15 @@ library(data.table)
 library(gridExtra)
 library(themis)
 library(ggmosaic)
+library(tabnet)
+library(torch)
 theme_set(theme_bw())
 ```
 
 ## Data load
 
 ```{r}
-file_path <- 'C:/Users/sangdon/Desktop/dacon_creditcard/open/open'
+file_path <- 'C:/Users/uos/Desktop/dacon_creditcard/open/open'
 files <- list.files(file_path)
 files
 ```
@@ -115,6 +117,8 @@ all_data %>%
 all_data %>% 
   count(month_employed) # month_employed : 12699, count = 6135 
 ```
+
+
 ```{r}
 all_data %>% 
   recipe(credit~.) %>% 
@@ -240,7 +244,8 @@ all_data %>%
 
 all_data %>% 
   recipe(credit~.) %>% 
-  step_smote(credit, over_ratio = 0.5) %>% 
+  #step_smote(credit, over_ratio = 0.5) %>% 
+  step_upsample(credit, over_ratio = 0.5) %>% 
   prep(training = all_data) %>%
   bake(new_data = all_data) -> all_data
 
@@ -409,7 +414,7 @@ xgb_res <- tune_grid(
     metrics = metric_set(mn_log_loss),
     control = control_grid(save_pred = TRUE)    
 )
-toc()  
+toc()  # 5588.3 1시간 30분 
 ```
 
 ## Final model update
@@ -459,19 +464,20 @@ final_xgb %>%
     pull_workflow_fit() %>% 
     vip(geom = 'point') 
 ```
+
+
+
 # tabnet 
 
 ```{r}
-library(tabnet)
 all_data %>% 
   recipe(credit~.) %>% 
-  step_normalize(all_numeric()) %>% 
-  prep(training = all_data) %>%
-  bake(new_data = all_data) -> tab_rec
+  step_normalize(all_numeric()) -> tab_rec
 
 ```
 
 ```{r}
+
 wflow_tabnet_fit <- 
   workflow() %>% 
   add_model(
@@ -479,9 +485,12 @@ wflow_tabnet_fit <-
       mode = 'classification', 
       batch_size = 128, 
       virtual_batch_size = 128, 
-      epochs = 10
-    )
-  )
+      epochs = 2
+    ) %>% 
+      set_engine('torch', verbose = TRUE)
+  ) %>% 
+  add_recipe(tab_rec) %>% 
+  fit(train2)
 ```
 
 
@@ -500,6 +509,6 @@ submission
 names(submission) <- sub_col
 
 write.csv(submission, row.names = FALSE,
-          "dacon_xgb.csv")
+          "dacon_xgb_upsampling.csv")
 ```
 
