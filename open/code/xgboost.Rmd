@@ -35,13 +35,14 @@ library(themis)
 library(ggmosaic)
 library(tabnet)
 library(torch)
+library(embed)
 theme_set(theme_bw())
 ```
 
 ## Data load
 
 ```{r}
-file_path <- 'C:/Users/sangdon/Desktop/dacon_creditcard/open/open'
+file_path <- 'C:/Users/uos/Desktop/dacon_creditcard/open/open'
 files <- list.files(file_path)
 files
 ```
@@ -64,27 +65,21 @@ skim(train)
 ```{r}
 head(test)
 skim(test)
-
-test %>% 
-  summarise(across(.fns = ~sum(is.na(.))/length(.)))
-
-
 ```
 
 # data preprocessing {.tabset .tabset-fade}
 
-## combine train, test 
-
-```{r}
-all_data <- bind_rows(train, test)
-```
-
 ## Change variable type
 ```{r}
-cols <- colnames(all_data)[c(13:18, 20)]
-all_data %>% 
+cols1 <- colnames(train)[c(13:18, 20)]
+train %>% 
     mutate_if(is.character, as.factor) %>% 
-    mutate_at(cols, funs(factor(.))) -> all_data
+    mutate_at(cols1, funs(factor(.))) -> train
+
+cols2 <- colnames(train)[c(13:18)]
+test %>% 
+    mutate_if(is.character, as.factor) %>% 
+    mutate_at(cols2, funs(factor(.))) -> test
 ```
 
 ## change date variable 
@@ -94,103 +89,172 @@ days_employed : 업무 시작일(-1이면 데이터 수집일 하루 전부터 �
 begin_month : 신용카드 발급 월(-1은 데이터 수집일 한 달 전에 신용카드를 발급했음을 의미)
 
 ```{r}
-all_data %>% 
-    mutate(days_birth = days_birth + 25152, # 출생일
-           days_employed = days_employed + 15713, # 업무 시작일  
-           begin_month = begin_month + 60) -> all_data # 신용카드 발급 월 
 
-all_data %>% 
-  mutate(year_birth = round(days_birth/365), 
-         month_birth = round(days_birth/30), 
-         year_employed = round(days_employed/365),
-         month_employed = round(days_employed/30), 
-         begin_year = begin_month/12
-         ) %>% 
-  select(-c(days_birth, days_employed))-> all_data
+ymd_rec <- train %>% 
+  recipe(credit~.) %>% 
+  step_mutate(
+              days_birth = days_birth + 25152, # 출생일
+              days_employed = days_employed + 15713, # 업무 시작일  
+              begin_month = begin_month + 60) %>% 
+  step_mutate(
+              year_birth = round(days_birth/365), 
+              month_birth = round(days_birth/30), 
+              year_employed = round(days_employed/365),
+              month_employed = round(days_employed/30), 
+              begin_year = begin_month/12) %>% 
+  prep(training = train) 
 
+train_eda <- juice(ymd_rec)
 ```
 
+# date variable visualization {.tabset .tabset-fade}
+
+## month_employed : 업무 시작달
+
 ```{r}
-all_data %>% 
-  ggplot(aes(x = birth, y = income_total)) + geom_point()
+a1 <- train_eda %>% 
+  ggplot(aes(x = month_employed)) + geom_histogram(bins = 100)
 
-all_data %>% 
-  ggplot(aes(x = begin_month, y = income_total)) + geom_point()
+a2 <- train_eda %>% 
+  filter(month_employed != 12699) %>% 
+  ggplot(aes(x = month_employed)) + geom_histogram(bins = 100)
 
-all_data %>% 
-  ggplot(aes(x = month_employed, y = income_total)) + geom_point()
+grid.arrange(a1, a2)
+```
 
-all_data %>% 
-  ggplot(aes(x = month_employed)) + geom_histogram()
-
-all_data %>% 
-  count(month_employed) # month_employed : 12699, count = 6135 
-
-all_data %>% 
-  drop_na(month_employed) %>% 
+## month_employed == 12699 : 퇴직자의 경우 
+```{r}
+train_eda %>% 
   filter(month_employed == 12699) %>% 
   ggplot(aes(x = credit)) + geom_bar()+
   geom_label(stat = 'count', aes(label = ..count..))
+
+train_eda %>% 
+  filter(month_employed == 12699) %>% 
+  ggplot(aes(x = income_total)) + geom_histogram(bins = 50)
+```
+
+## discretize month_employed
+```{r}
+train_eda %>% 
+  select(month_employed) %>% 
+  filter(month_employed!=12699) %>% 
+  summary()
+
+train_eda %>% 
+  recipe(credit~.) %>%
+  step_mutate(discrize_employed = month_employed) %>% 
+  step_cut(discrize_employed, breaks = c(407, 458, 491, 523, 12699)) %>% 
+  prep(training = train_eda) %>% 
+  bake(new_data = train_eda) %>% 
+  ggplot(aes(x = discrize_employed)) + geom_bar() +  
+  geom_label(stat = 'count', aes(label = ..count..))
+
 ```
 
 
+## discretization 기준
+특정 구간과 credit 간의 상관 관계가 가장 큰 구간을 선택할 필요가 있음. 
+카이제곱 통계량이 가장 큰 구간을 상관 관계가 가장 큰 구간이라고 생각하는 것이 합리적? 
+모형기반 : cart, xgb 기반으로 쪼갤 수도 있음. y에 연관성이 들어가는게 합리적? 
+
+embed::step_discretize_cart, step_discretize_xgb  
+https://embed.tidymodels.org/reference/step_discretize_cart.html
+
 ```{r}
-all_data %>% 
+train_eda %>% 
   recipe(credit~.) %>%
-  step_mutate(discrize_employed = month_employed) %>% 
-  step_discretize(discrize_employed, num_breaks = 5) %>% 
-  step_integer(discrize_employed) %>% 
-  prep(training = all_data) %>% 
-  bake(new_data = all_data) -> all_data
+  step_mutate(disc_employed = month_employed) %>% 
+  step_cut(disc_employed, breaks = c(407, 458, 491, 523, 12699)) %>% 
+  prep(training = train_eda) %>% 
+  bake(new_data = train_eda) %>% 
+  select(disc_employed, credit) %>% 
+  table() %>% 
+  chisq.test()
+```
 
 
+##  year_birth
+```{r}
+train_eda$year_birth %>% summary()
+train_eda %>% 
+  ggplot(aes(x=year_birth)) + geom_histogram()
 
+train_eda %>% 
+  recipe(credit~.) %>%
+  step_mutate(disc_birth = year_birth) %>% 
+  step_cut(disc_birth, breaks = c(10, 20, 30, 40)) %>% 
+  prep(training = train_eda) %>% 
+  bake(new_data = train_eda) %>% 
+  select(disc_birth) %>% 
+  ggplot(aes(x = disc_birth)) + geom_bar()+
+  geom_label(stat = 'count', aes(label = ..count..))
+  
+
+```
+
+##  begin_month : 신용카드 발급 이후 몇달이 지났는지(begin_year : 신용카드 발급 후 몇년이 지났는지) 
+```{r}
+train_eda %>% 
+  ggplot(aes(x = begin_month)) + geom_histogram()
+
+train_eda$begin_month %>% summary()
+train_eda$begin_year %>% summary()
+
+train_eda %>% 
+  recipe(credit~.) %>%
+  step_mutate(disc_begin = begin_year) %>% 
+  step_cut(disc_begin, breaks = c(1, 2, 3, 4)) %>% 
+  prep(training = train_eda) %>% 
+  bake(new_data = train_eda) %>% 
+  select(disc_begin) %>% 
+  ggplot(aes(x = disc_begin)) + geom_bar()+
+   geom_label(stat = 'count', aes(label = ..count..))
 ```
 
 
 
 # Univariate visualization {.tabset .tabset-fade}
 
-```{r}
-table(all_data$gender, useNA = 'always')
-table(all_data$car, useNA = 'always')
-table(all_data$reality, useNA = 'always')
-table(all_data$income_type, useNA = 'always') # label 불균형 
-table(all_data$edu_type, useNA = 'always')
-table(all_data$family_type, useNA = 'always')
-table(all_data$house_type, useNA = 'always') # label 불균형 
-table(all_data$flag_mobil, useNA = 'always')
-table(all_data$work_phone, useNA = 'always')
-table(all_data$phone, useNA = 'always')
-table(all_data$email, useNA = 'always') # label 불균형 
-table(all_data$occyp_type, useNA = 'always') # label 불균형 
-table(all_data$credit)
-```
-
-
 ## income_type : 소득 분류 
 commercial associate, pensioner(연금 수급자), state servant(공무원), student, working 
 
 ```{r}
-table(all_data$income_type, useNA = 'always')
-all_data %>% 
-  ggplot(aes(x = income_type, y = income_total)) + geom_boxplot() 
+train_eda %>% 
+  ggplot(aes(x = income_type)) + geom_bar() + 
+  aes(stringr::str_wrap(income_type, 15)) + 
+  xlab('income_type')+
+  geom_label(stat = 'count', aes(label = ..count..))
 
-all_data %>% 
+train_eda %>% 
+  ggplot(aes(x = income_type, y = income_total)) + 
+  geom_boxplot(aes(fill = income_type)) 
+
+train_eda %>% 
   filter(!is.na(income_type), !is.na(credit)) %>% 
   ggplot()+geom_mosaic(aes(x = product(income_type, credit), fill = income_type))
 
 ```
+
+
 ## house_type : 생활 방식 
 co-op apartment(주택 협동조합), house apartment, municipal apartment(공공 주택), office apartment(회사), rented apartment(임대 주택), with parents
 
 ```{r}
-all_data %>% 
+train_eda %>% 
   ggplot(aes(x = house_type)) + geom_bar() + 
   aes(stringr::str_wrap(house_type, 15)) + 
-  xlab('house_type')
+  xlab('house_type')+
+  geom_label(stat = 'count', aes(label = ..count..))
 
-all_data %>% 
+train_eda %>% 
+  ggplot(aes(x = house_type, y = income_total)) + 
+  aes(stringr::str_wrap(house_type, 15)) +
+  xlab('house_type')+
+  geom_boxplot(aes(fill = house_type)) 
+  
+
+train_eda %>% 
   filter(!is.na(house_type), !is.na(credit)) %>% 
   ggplot()+geom_mosaic(aes(x = product(house_type, credit), fill = house_type))
 
@@ -199,13 +263,14 @@ all_data %>%
 ## email
 
 ```{r}
-all_data %>% 
-  ggplot(aes(x = email)) + geom_bar()
+train_eda %>% 
+  ggplot(aes(x = email)) + geom_bar() + 
+  geom_label(stat = 'count', aes(label = ..count..))
 
-all_data %>% 
+train_eda %>% 
   ggplot(aes(x = email, y = income_total, fill = email)) + geom_boxplot()
 
-all_data %>% 
+train_eda %>% 
   filter(!is.na(email), !is.na(credit)) %>% 
   ggplot()+geom_mosaic(aes(x = product(email, credit), fill = email))
 
@@ -216,71 +281,101 @@ all_data %>%
 accountants, cleaning staff, cooking staff, core staff(정규직), drivers, high skill tech staff, HR staff, IT staff, Laborers, Low-skill Laborers, managers, medicine staff
 
 ```{r}
-table(all_data$occyp_type, useNA = 'always') # label 불균형 
-
-
-all_data %>% 
-  ggplot(aes(x = occyp_type)) + 
-  geom_bar() + 
+train_eda %>% 
+  ggplot(aes(x = occyp_type)) + geom_bar() + 
+  geom_label(stat = 'count', aes(label = ..count..))+
   coord_flip()
 
-all_data %>% 
+
+train_eda %>% 
   filter(!is.na(occyp_type), !is.na(credit)) %>% 
   ggplot(aes(x = occyp_type, y = income_total, fill = occyp_type)) + 
   geom_boxplot() + 
   coord_flip()
 
-all_data %>% 
+train_eda %>% 
   filter(!is.na(occyp_type), !is.na(credit)) %>% 
   ggplot()+geom_mosaic(aes(x = product(occyp_type, credit), fill =occyp_type))
 
 ```
 
-## Preprocessing factor variable 
+# data split 
 
 ```{r}
-all_data %>% 
+set.seed(20210423)
+vb_folds <- vfold_cv(train, v = 5, strata = credit)
+val_set <- validation_split(train, strata = 'credit', prop = 0.7)
+```
+
+# Recipe
+
+```{r}
+model_rec <- train %>% 
   recipe(credit~.) %>%
-  step_rm(flag_mobil) %>%
-  step_other(income_type, occyp_type, house_type, threshold = 0.1) %>% 
+  step_mutate(
+              days_birth = days_birth + 25152, # 출생일
+              days_employed = days_employed + 15713, # 업무 시작일  
+              begin_month = begin_month + 60) %>% 
+  step_mutate(
+              year_birth = round(days_birth/365), 
+              month_birth = round(days_birth/30), 
+              year_employed = round(days_employed/365),
+              month_employed = round(days_employed/30), 
+              begin_year = begin_month/12) %>%
+  step_mutate(
+              disc_employed = month_employed, 
+              disc_birth = year_birth, 
+              disc_begin = begin_year) %>%
+  
+  step_cut(disc_birth, breaks = c(10, 20, 30, 40)) %>% 
+  step_cut(disc_employed, breaks = c(407, 458, 491, 523, 12699)) %>% 
+  step_cut(disc_begin, breaks = c(1, 2, 3, 4)) %>% 
+  
+  step_other(income_type, occyp_type, house_type, threshold = 0.1, other = 'infreq_combined') %>% 
   step_bagimpute(occyp_type, impute_with = imp_vars(car, reality, income_total, income_type, edu_type, house_type, family_type, family_size),  trees = 100) %>% 
-  prep(training = all_data) %>% 
-  bake(new_data = all_data) -> all_data
+  step_dummy(all_nominal(), -credit, one_hot = TRUE) %>%
+  step_normalize(all_numeric(), -all_outcomes()) %>% 
+  step_rm(flag_mobil, index, days_birth, days_employed) %>%
+  step_smote(credit, over_ratio = tune()) 
 
+# upsampling tuning : https://konradsemsch.netlify.app/2019/10/testing-the-tune-package-from-tidymodels-analysing-the-relationship-between-the-upsampling-ratio-and-model-performance/
+  
+grid <- grid_regular(
+  over_ratio() %>% 
+    range_set(c(0.1, 1)), 
+  levels = 10
+)
+grid
 ```
-
-# Recipes
-```{r}
-all_data %>% 
-  recipe(credit~.) %>%
-  step_rm(index) %>% 
-  step_dummy(all_nominal(), -credit, one_hot = TRUE) %>% 
-  #step_integer(all_nominal(), -all_outcomes()) %>% 
-  step_center(all_predictors(), -all_outcomes()) %>% 
-  step_scale(all_numeric()) %>% 
-  prep(training = all_data) %>%
-  bake(new_data = all_data) -> all_data
-
-
-```
-
-
-# Split train, test {.tabset .tabset-fade}
 
 ```{r}
-train_index <- seq_len(nrow(train))
-train2 <- all_data[train_index,]
-test2 <- all_data[-train_index,]
+engine <- rand_forest(
+  mtry = 16, 
+  trees = 500, 
+  min_n = 2
+) %>% 
+  set_mode('classification') %>% 
+  set_engine('ranger')
+
+rec_test <- workflow() %>% 
+    add_recipe(model_rec) %>% 
+    add_model(engine)
+
+fits <- tune_grid(
+  rec_test,
+  model = engine,
+  rs = vb_folds,
+  grid = grid,
+  perf = metric_set(roc_auc, j_index, sens, mn_log_loss),
+  control = grid_control(verbose = FALSE)
+  )
+
 
 ```
 
-# cross validation
 
-```{r}
-set.seed(20210410)
-vb_folds <- vfold_cv(train2, v = 5, strata = credit)
-vb_folds
-```
+
+
 
 # randomforest setting {.tabset .tabset-fade}
 
@@ -434,14 +529,12 @@ toc()  # 5588.3 1시간 30분
 ```{r}
 best_param <- select_best(xgb_res)
 final_xgb <- finalize_workflow(xgb_wf, best_param)
-final_xgb
 ```
 
 ## final model setting
 
 ```{r}
 final_model <- finalize_model(xgb_spec, best_param) 
-final_model # tuning이 끝난 최종 모형 
 ```
 
 ## final model workflow에 업데이트
@@ -576,6 +669,10 @@ submission
 names(submission) <- sub_col
 
 write.csv(submission, row.names = FALSE,
+<<<<<<< Updated upstream
           "dacon_multinom.csv")
+=======
+          "dacon_xgb_smote_rate_default.csv")
+>>>>>>> Stashed changes
 ```
 
