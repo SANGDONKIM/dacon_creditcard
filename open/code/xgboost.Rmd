@@ -1,5 +1,5 @@
 ---
-title: "XGboost bayesopt with credit data"
+title: "Credit data with tidymodels"
 output:
   html_document:
     number_sections: true
@@ -11,8 +11,6 @@ output:
     highlight: tango
     code_folding: show
 ---
-
-
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE,
@@ -37,12 +35,13 @@ library(tabnet)
 library(torch)
 library(embed)
 theme_set(theme_bw())
+library(stacks)
 ```
 
 ## Data load
 
 ```{r}
-file_path <- 'C:/Users/uos/Desktop/dacon_creditcard/open/open'
+file_path <- 'C:/Users/sangdon/Desktop/dacon_creditcard/open/open'
 files <- list.files(file_path)
 files
 ```
@@ -55,6 +54,7 @@ test <- read_csv(file.path(file_path, "test.csv")) %>% janitor::clean_names()
 # Data overview (데이터 기본정보) {.tabset .tabset-fade}
 
 ## train data
+
 ```{r}
 head(train)
 skim(train)
@@ -70,6 +70,7 @@ skim(test)
 # data preprocessing {.tabset .tabset-fade}
 
 ## Change variable type
+
 ```{r}
 cols1 <- colnames(train)[c(13:18, 20)]
 train %>% 
@@ -82,11 +83,9 @@ test %>%
     mutate_at(cols2, funs(factor(.))) -> test
 ```
 
-## change date variable 
+## change date variable
 
-days_birth : 출생일(-1이면 데이터 수집일 하루 전에 태어났음을 의미)
-days_employed : 업무 시작일(-1이면 데이터 수집일 하루 전부터 일을 시작했음을 의미)
-begin_month : 신용카드 발급 월(-1은 데이터 수집일 한 달 전에 신용카드를 발급했음을 의미)
+days_birth : 출생일(-1이면 데이터 수집일 하루 전에 태어났음을 의미) days_employed : 업무 시작일(-1이면 데이터 수집일 하루 전부터 일을 시작했음을 의미) begin_month : 신용카드 발급 월(-1은 데이터 수집일 한 달 전에 신용카드를 발급했음을 의미)
 
 ```{r}
 
@@ -122,7 +121,8 @@ a2 <- train_eda %>%
 grid.arrange(a1, a2)
 ```
 
-## month_employed == 12699 : 퇴직자의 경우 
+## month_employed == 12699 : 퇴직자의 경우
+
 ```{r}
 train_eda %>% 
   filter(month_employed == 12699) %>% 
@@ -135,6 +135,7 @@ train_eda %>%
 ```
 
 ## discretize month_employed
+
 ```{r}
 train_eda %>% 
   select(month_employed) %>% 
@@ -152,14 +153,12 @@ train_eda %>%
 
 ```
 
-
 ## discretization 기준
-특정 구간과 credit 간의 상관 관계가 가장 큰 구간을 선택할 필요가 있음. 
-카이제곱 통계량이 가장 큰 구간을 상관 관계가 가장 큰 구간이라고 생각하는 것이 합리적? 
-모형기반 : cart, xgb 기반으로 쪼갤 수도 있음. y에 연관성이 들어가는게 합리적? 
 
-embed::step_discretize_cart, step_discretize_xgb  
-https://embed.tidymodels.org/reference/step_discretize_cart.html
+특정 구간과 credit 간의 상관 관계가 가장 큰 구간을 선택할 필요가 있음. 카이제곱 통계량이 가장 큰 구간을 상관 관계가 가장 큰 구간이라고 생각하는 것이 합리적? 모형기반 : cart, xgb 기반으로 쪼갤 수도 있음. y에 연관성이 들어가는게 합리적?
+
+embed::step_discretize_cart, step_discretize_xgb\
+<https://embed.tidymodels.org/reference/step_discretize_cart.html>
 
 ```{r}
 train_eda %>% 
@@ -173,8 +172,8 @@ train_eda %>%
   chisq.test()
 ```
 
+## year_birth
 
-##  year_birth
 ```{r}
 train_eda$year_birth %>% summary()
 train_eda %>% 
@@ -193,7 +192,8 @@ train_eda %>%
 
 ```
 
-##  begin_month : 신용카드 발급 이후 몇달이 지났는지(begin_year : 신용카드 발급 후 몇년이 지났는지) 
+## begin_month : 신용카드 발급 이후 몇달이 지났는지(begin_year : 신용카드 발급 후 몇년이 지났는지)
+
 ```{r}
 train_eda %>% 
   ggplot(aes(x = begin_month)) + geom_histogram()
@@ -209,15 +209,14 @@ train_eda %>%
   bake(new_data = train_eda) %>% 
   select(disc_begin) %>% 
   ggplot(aes(x = disc_begin)) + geom_bar()+
-   geom_label(stat = 'count', aes(label = ..count..))
+  geom_label(stat = 'count', aes(label = ..count..))
 ```
-
-
 
 # Univariate visualization {.tabset .tabset-fade}
 
-## income_type : 소득 분류 
-commercial associate, pensioner(연금 수급자), state servant(공무원), student, working 
+## income_type : 소득 분류
+
+commercial associate, pensioner(연금 수급자), state servant(공무원), student, working
 
 ```{r}
 train_eda %>% 
@@ -236,8 +235,8 @@ train_eda %>%
 
 ```
 
+## house_type : 생활 방식
 
-## house_type : 생활 방식 
 co-op apartment(주택 협동조합), house apartment, municipal apartment(공공 주택), office apartment(회사), rented apartment(임대 주택), with parents
 
 ```{r}
@@ -299,19 +298,12 @@ train_eda %>%
 
 ```
 
-# data split 
-
-```{r}
-set.seed(20210423)
-vb_folds <- vfold_cv(train, v = 5, strata = credit)
-val_set <- validation_split(train, strata = 'credit', prop = 0.7)
-```
-
 # Recipe
 
 ```{r}
 model_rec <- train %>% 
   recipe(credit~.) %>%
+  step_rm(flag_mobil, index, ) %>% 
   step_mutate(
               days_birth = days_birth + 25152, # 출생일
               days_employed = days_employed + 15713, # 업무 시작일  
@@ -328,58 +320,39 @@ model_rec <- train %>%
               disc_begin = begin_year) %>%
   
   step_cut(disc_birth, breaks = c(10, 20, 30, 40)) %>% 
-  step_cut(disc_employed, breaks = c(407, 458, 491, 523, 12699)) %>% 
+  step_cut(disc_employed, breaks = c(407, 458, 491, 523, 12699)) %>%
   step_cut(disc_begin, breaks = c(1, 2, 3, 4)) %>% 
   
   step_other(income_type, occyp_type, house_type, threshold = 0.1, other = 'infreq_combined') %>% 
-  step_bagimpute(occyp_type, impute_with = imp_vars(car, reality, income_total, income_type, edu_type, house_type, family_type, family_size),  trees = 100) %>% 
+  step_impute_bag(occyp_type, impute_with = imp_vars(car, reality, income_total, income_type, edu_type, house_type, family_type, family_size),  trees = 100) %>% 
   step_dummy(all_nominal(), -credit, one_hot = TRUE) %>%
   step_normalize(all_numeric(), -all_outcomes()) %>% 
-  step_rm(flag_mobil, index, days_birth, days_employed) %>%
-  step_smote(credit, over_ratio = tune()) 
+  step_rm(days_birth, days_employed) %>% 
+  prep(training = train)
+  #step_smote(credit, over_ratio = tune()) 
 
 # upsampling tuning : https://konradsemsch.netlify.app/2019/10/testing-the-tune-package-from-tidymodels-analysing-the-relationship-between-the-upsampling-ratio-and-model-performance/
-  
-grid <- grid_regular(
-  over_ratio() %>% 
-    range_set(c(0.1, 1)), 
-  levels = 10
-)
-grid
+
 ```
 
 ```{r}
-engine <- rand_forest(
-  mtry = 16, 
-  trees = 500, 
-  min_n = 2
-) %>% 
-  set_mode('classification') %>% 
-  set_engine('ranger')
-
-rec_test <- workflow() %>% 
-    add_recipe(model_rec) %>% 
-    add_model(engine)
-
-fits <- tune_grid(
-  rec_test,
-  model = engine,
-  rs = vb_folds,
-  grid = grid,
-  perf = metric_set(roc_auc, j_index, sens, mn_log_loss),
-  control = grid_control(verbose = FALSE)
-  )
-
-
+train2 <- juice(model_rec)
+test2 <- bake(model_rec, new_data = test)
 ```
 
+```{r}
+set.seed(20210423)
+vb_folds <- vfold_cv(train2, v = 3, strata = credit)
+```
 
-
-
+```{r}
+ctrl_grid <- control_stack_grid()
+```
 
 # randomforest setting {.tabset .tabset-fade}
 
-## randomforest hyperparameter setting 
+## randomforest hyperparameter setting
+
 ```{r}
 rf_spec <- rand_forest(
   mtry = tune(), 
@@ -398,8 +371,8 @@ rf_wf <- workflow() %>%
     add_model(rf_spec)
 ```
 
+## hyperparameter 튜닝
 
-## hyperparameter 튜닝 
 ```{r}
 library(tictoc)
 tic()
@@ -409,19 +382,18 @@ set.seed(1234)
 rf_res <- tune_grid(
     rf_wf,  
     resamples = vb_folds, 
-    grid = 30,
+    grid = 5,
     metrics = metric_set(mn_log_loss), 
-    control = control_grid(save_pred = TRUE)    
+    control = ctrl_grid    
 )
 toc() # 2270.45
-
+# mtry : 58, min_n = 14
 ```
-
 
 ## Final model update
 
 ```{r}
-best_param_rf <- select_best(rf_res) # metric 설정안해놓으면 roc_auc로 설정됨 
+best_param_rf <- select_best(rf_res) 
 final_rf <- finalize_workflow(rf_wf, best_param_rf)
 final_rf
 ```
@@ -447,16 +419,14 @@ rf_fit <- fit(final_rf_workflow, data = train2)
 
 # Result {.tabset .tabset-fade}
 
-## Prediction 
+## Prediction
 
 ```{r}
 pred_rf <- 
-    predict(rf_fit, test2, type = 'prob') %>% 
-    mutate(modelo = "randomforest")
-pred_rf %>% head()
+    predict(rf_fit, test2, type = 'prob')
+pred_rf %>% head() 
 
 ```
-
 
 # XGboost setting {.tabset .tabset-fade}
 
@@ -470,7 +440,7 @@ xgb_spec <- boost_tree(
     loss_reduction = tune(),  
     sample_size = tune(), 
     mtry = tune(),  
-    learn_rate = tune() 
+    learn_rate = tune()
 ) %>% 
     set_engine('xgboost') %>%  
     set_mode('classification')
@@ -486,14 +456,8 @@ xgb_wf <- workflow() %>%
     add_model(xgb_spec)
 ```
 
-## cross validation
+## Grid search
 
-```{r}
-set.seed(20210409)
-vb_folds <- vfold_cv(train2, v = 5, strata = credit)
-```
-
-## Grid search 
 ```{r}
 xgb_grid <- grid_latin_hypercube(
     tree_depth(), 
@@ -502,12 +466,12 @@ xgb_grid <- grid_latin_hypercube(
     sample_size = sample_prop(), 
     finalize(mtry(), train2), 
     learn_rate(), 
-    size = 30
+    size = 10
 )
 ```
 
+## hyperparameter 튜닝
 
-## hyperparameter 튜닝 
 ```{r}
 library(tictoc)
 tic()
@@ -519,39 +483,39 @@ xgb_res <- tune_grid(
     resamples = vb_folds, 
     grid = xgb_grid, 
     metrics = metric_set(mn_log_loss),
-    control = control_grid(save_pred = TRUE)    
+    control = ctrl_grid    
 )
-toc()  # 5588.3 1시간 30분 
+toc()  # 1396.34 sec 
 ```
 
 ## Final model update
 
 ```{r}
-best_param <- select_best(xgb_res)
-final_xgb <- finalize_workflow(xgb_wf, best_param)
+best_param_xgb <- select_best(xgb_res)
+final_xgb <- finalize_workflow(xgb_wf, best_param_xgb)
 ```
 
 ## final model setting
 
 ```{r}
-final_model <- finalize_model(xgb_spec, best_param) 
+final_model <- finalize_model(xgb_spec, best_param_xgb) 
 ```
 
 ## final model workflow에 업데이트
 
 ```{r}
-final_workflow <- xgb_wf %>% update_model(final_model)
+final_xgb_workflow <- xgb_wf %>% update_model(final_model)
 ```
 
 ## final model 학습
 
 ```{r}
-xgb_fit <- fit(final_workflow, data = train2)
+xgb_fit <- fit(final_xgb_workflow, data = train2)
 ```
 
 # Result {.tabset .tabset-fade}
 
-## Prediction 
+## Prediction
 
 ```{r}
 pred_xgb <- 
@@ -570,7 +534,7 @@ final_xgb %>%
     vip(geom = 'point') 
 ```
 
-# regularized logistic regression 
+# regularized multinomial regression
 
 ```{r}
 multi_spec <- multinom_reg(mode = "classification",
@@ -596,7 +560,7 @@ multi_spec_tbl <- tune_grid(
   resamples = vb_folds, 
   grid = lambda_grid, 
   metrics = metric_set(mn_log_loss),
-  control = control_grid(save_pred = TRUE)
+  control = ctrl_grid
 )
 multi_spec_tbl
 ```
@@ -617,47 +581,33 @@ multi_final_workflow <- multi_wf %>% update_model(multi_final_model)
 ```{r}
 multi_fit <- fit(multi_final_workflow, data = train2)
 ```
+
 ```{r}
 pred_multinom <- 
     predict(multi_fit, test2, type = 'prob') 
 pred_multinom %>% head()
-
 ```
 
-
-
-
-# tabnet 
+# stacking
 
 ```{r}
-all_data %>% 
-  recipe(credit~.) %>% 
-  step_normalize(all_numeric()) -> tab_rec
+library(doParallel)
+cores<-detectCores()/2
+cl <- makeCluster(cores)
+registerDoParallel(cl)
 
+credit_stacking <- 
+  stacks() %>% 
+  add_candidates(rf_res) %>% 
+  add_candidates(xgb_res) %>% 
+  add_candidates(multi_spec_tbl) %>% 
+  blend_predictions() %>% 
+  fit_members()
+
+result <- predict(credit_stacking, test2)
 ```
-
-```{r}
-
-wflow_tabnet_fit <- 
-  workflow() %>% 
-  add_model(
-    tabnet(
-      mode = 'classification', 
-      batch_size = 128, 
-      virtual_batch_size = 128, 
-      epochs = 2
-    ) %>% 
-      set_engine('torch', verbose = TRUE)
-  ) %>% 
-  add_recipe(tab_rec) %>% 
-  fit(train2)
-```
-
-
-
 
 # Submit file {.tabset .tabset-fade}
-
 
 ```{r, message=FALSE}
 submission <- read_csv(file.path(file_path, "sample_submission.csv"))
@@ -665,14 +615,8 @@ submission <- read_csv(file.path(file_path, "sample_submission.csv"))
 sub_col <- names(submission)
 
 submission <- bind_cols(submission$index, pred_multinom)
-submission
 names(submission) <- sub_col
 
 write.csv(submission, row.names = FALSE,
-<<<<<<< Updated upstream
-          "dacon_multinom.csv")
-=======
-          "dacon_xgb_smote_rate_default.csv")
->>>>>>> Stashed changes
+          "dacon_multi.csv")
 ```
-

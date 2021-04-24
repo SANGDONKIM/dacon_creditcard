@@ -11,7 +11,7 @@ library(tune)
 all_cores <- parallel::detectCores(logical = FALSE)
 
 registerDoFuture()
-cl <- makeCluster(all_cores)
+cl <- parallel::makeCluster(all_cores)
 plan(cluster, workers = cl)
 
 data("credit_data")
@@ -84,7 +84,14 @@ fits <- tune_grid(
     model = engine,
     resamples = train_cv,
     grid = grid,
-    perf = metric_set(roc_auc, j_index, sens, spec),
+    perf = metric_set(roc_auc),
     control = control_grid(save_pred = TRUE)
 )
 toc()
+
+fits
+
+devtools::install_github("konradsemsch/ggrapid")
+
+?estimate(fits) %>% 
+    arrange(desc(over_ratio))
