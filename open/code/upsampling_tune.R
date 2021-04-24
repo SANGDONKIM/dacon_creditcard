@@ -65,7 +65,7 @@ recipe <- df_train %>%
     ) %>% 
     
     # Adding upsampling 
-    step_upsample(status, over_ratio = tune())
+    step_upsample(status, over_ratio(range = c(0.8, 1.2), trans = NULL))
 
 
 (grid <- grid_regular(
@@ -83,9 +83,9 @@ fits <- tune_grid(
     t_rec,
     model = engine,
     resamples = train_cv,
-    grid = grid,
-    perf = metric_set(roc_auc),
-    control = control_grid(save_pred = TRUE)
+    #grid = grid,
+    #perf = metric_set(roc_auc),
+    #control = control_grid(save_pred = TRUE)
 )
 toc()
 

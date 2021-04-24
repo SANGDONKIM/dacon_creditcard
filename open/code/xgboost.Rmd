@@ -41,7 +41,7 @@ library(stacks)
 ## Data load
 
 ```{r}
-file_path <- 'C:/Users/sangdon/Desktop/dacon_creditcard/open/open'
+file_path <- 'C:/Users/uos/Desktop/dacon_creditcard/open/open'
 files <- list.files(file_path)
 files
 ```
@@ -324,10 +324,14 @@ model_rec <- train %>%
   step_cut(disc_begin, breaks = c(1, 2, 3, 4)) %>% 
   
   step_other(income_type, occyp_type, house_type, threshold = 0.1, other = 'infreq_combined') %>% 
+  
   step_impute_bag(occyp_type, impute_with = imp_vars(car, reality, income_total, income_type, edu_type, house_type, family_type, family_size),  trees = 100) %>% 
+  
   step_dummy(all_nominal(), -credit, one_hot = TRUE) %>%
   step_normalize(all_numeric(), -all_outcomes()) %>% 
+  
   step_rm(days_birth, days_employed) %>% 
+  
   prep(training = train)
   #step_smote(credit, over_ratio = tune()) 
 
@@ -342,7 +346,7 @@ test2 <- bake(model_rec, new_data = test)
 
 ```{r}
 set.seed(20210423)
-vb_folds <- vfold_cv(train2, v = 3, strata = credit)
+vb_folds <- vfold_cv(train2, v = 5, strata = credit)
 ```
 
 ```{r}
@@ -382,12 +386,12 @@ set.seed(1234)
 rf_res <- tune_grid(
     rf_wf,  
     resamples = vb_folds, 
-    grid = 5,
+    grid = 30,
     metrics = metric_set(mn_log_loss), 
     control = ctrl_grid    
 )
-toc() # 2270.45
-# mtry : 58, min_n = 14
+toc() # 14075.76  
+# mtry : 44, min_n = 16
 ```
 
 ## Final model update
@@ -485,7 +489,7 @@ xgb_res <- tune_grid(
     metrics = metric_set(mn_log_loss),
     control = ctrl_grid    
 )
-toc()  # 1396.34 sec 
+toc()  # 2411.84 sec 
 ```
 
 ## Final model update
@@ -493,6 +497,7 @@ toc()  # 1396.34 sec
 ```{r}
 best_param_xgb <- select_best(xgb_res)
 final_xgb <- finalize_workflow(xgb_wf, best_param_xgb)
+# 51	28	15	0.002188723	1.791991e-06	0.8873527	Preprocessor1_Model10
 ```
 
 ## final model setting
@@ -532,9 +537,43 @@ final_xgb %>%
     fit(data = train2) %>%   
     pull_workflow_fit() %>% 
     vip(geom = 'point') 
+# begin_month, month_birth, month_employed, begin_year, income_total, year_birth, year_employed, car, phone, occp_type
 ```
 
 # regularized multinomial regression
+
+
+```{r}
+linear_rec <- train %>% 
+  recipe(credit~.) %>%
+  step_rm(flag_mobil, index) %>% 
+  step_mutate(
+              days_birth = days_birth + 25152, # 출생일
+              days_employed = days_employed + 15713, # 업무 시작일  
+              begin_month = begin_month + 60) %>% 
+  step_mutate(
+              year_birth = round(days_birth/365), 
+              month_birth = round(days_birth/30), 
+              year_employed = round(days_employed/365),
+              month_employed = round(days_employed/30), 
+              begin_year = begin_month/12) %>%
+  step_other(income_type, occyp_type, house_type, threshold = 0.1, other = 'infreq_combined') %>% 
+  
+  step_impute_bag(occyp_type, impute_with = imp_vars(car, reality, income_total, income_type, edu_type, house_type, family_type, family_size),  trees = 100) %>% 
+  step_BoxCox(all_numeric()) %>% 
+  step_dummy(all_nominal(), -credit, one_hot = TRUE) %>%
+  step_smote(credit, over_ratio = 0.7) %>% 
+  step_rm(days_birth, days_employed, begin_month, month_birth, month_employed) %>% 
+  prep(training = train)
+  
+
+```
+
+```{r}
+train3 <- juice(linear_rec)
+test3 <- bake(linear_rec, new_data = test)
+```
+
 
 ```{r}
 multi_spec <- multinom_reg(mode = "classification",
@@ -566,7 +605,7 @@ multi_spec_tbl
 ```
 
 ```{r}
-multi_best_param <- select_best(multi_spec_tbl)
+multi_best_param <- select_best(multi_spec_tbl) # 0.0003296647	0.9893142	Preprocessor1_Model49
 final_multinom <- finalize_workflow(multi_wf, multi_best_param)
 ```
 
@@ -579,23 +618,18 @@ multi_final_workflow <- multi_wf %>% update_model(multi_final_model)
 ```
 
 ```{r}
-multi_fit <- fit(multi_final_workflow, data = train2)
+multi_fit <- fit(multi_final_workflow, data = train3)
 ```
 
 ```{r}
 pred_multinom <- 
-    predict(multi_fit, test2, type = 'prob') 
+    predict(multi_fit, test3, type = 'prob') 
 pred_multinom %>% head()
 ```
 
 # stacking
 
 ```{r}
-library(doParallel)
-cores<-detectCores()/2
-cl <- makeCluster(cores)
-registerDoParallel(cl)
-
 credit_stacking <- 
   stacks() %>% 
   add_candidates(rf_res) %>% 
@@ -604,6 +638,8 @@ credit_stacking <-
   blend_predictions() %>% 
   fit_members()
 
+
+credit_stacking
 result <- predict(credit_stacking, test2)
 ```
 
@@ -618,5 +654,5 @@ submission <- bind_cols(submission$index, pred_multinom)
 names(submission) <- sub_col
 
 write.csv(submission, row.names = FALSE,
-          "dacon_multi.csv")
+          "dacon_multi1.csv")
 ```
